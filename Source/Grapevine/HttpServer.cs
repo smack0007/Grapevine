@@ -5,89 +5,159 @@ using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace Grapevine
 {
     public class HttpServer
     {
-        TcpListener tcpListener;
+		TcpListener tcpListener;
+		ManualResetEvent connectionReceived = new ManualResetEvent(false);
 
+		IPAddress address;
+		int port;
+
+		public bool IsRunning
+		{
+			get;
+			private set;
+		}
+
+		public IPAddress Address
+		{
+			get { return this.address; }
+			
+			set
+			{
+				if (this.IsRunning)
+					ThrowPropertyCannotBeChangedWhenRunningException("Address");
+
+				this.address = value;
+			}
+		}
+
+		public int Port
+		{
+			get { return this.port; }
+
+			set
+			{
+				if (this.IsRunning)
+					ThrowPropertyCannotBeChangedWhenRunningException("Port");
+
+				this.port = value;
+			}
+		}
+				
         public HttpServer()
         {
-
+			this.address = IPAddress.Any;
+			this.port = 8080;
         }
+
+		private static void ThrowPropertyCannotBeChangedWhenRunningException(string property)
+		{
+			throw new GrapevineException(string.Format("{0} property may not be changed once the server is running.", property));
+		}
 
         public void Start(Action<HttpRequest, HttpResponse> processRequest)
         {
             if (processRequest == null)
                 throw new ArgumentNullException("processRequest");
 
-            this.tcpListener = new TcpListener(IPAddress.Any, 8080);
+            this.tcpListener = new TcpListener(this.address, this.port);
             this.tcpListener.Start();
+			this.IsRunning = true;
 
-            while (true)
-            {
-                try
-                {
-                    this.WaitForClient(processRequest);
-                }
-                catch (Exception)
-                {
-                }
-            }
+			Task.Factory.StartNew((state) =>
+			{
+				while (this.IsRunning)
+				{
+					this.connectionReceived.Reset();
+									
+					this.tcpListener.BeginAcceptTcpClient(
+						this.Connect,
+						processRequest);
+
+					this.connectionReceived.WaitOne();
+				}
+			}, TaskCreationOptions.LongRunning);
         }
 
-        private void WaitForClient(Action<HttpRequest, HttpResponse> processRequest)
+		public void Stop()
+		{
+			this.tcpListener.Stop();
+			this.IsRunning = false;
+		}
+				
+        private void Connect(IAsyncResult asyncResult)
         {
-            var client = this.tcpListener.AcceptTcpClient();
+			TcpClient client = null;
 
-            Task.Factory.StartNew((state) =>
-            {                
-                using (NetworkStream stream = ((TcpClient)state).GetStream())
-                {
-                    StreamReader sr = new StreamReader(stream);
-                    string requestLine = sr.ReadLine();
+			try
+			{
+				if (this.IsRunning)
+				{
+					client = this.tcpListener.EndAcceptTcpClient(asyncResult);
+				}
+			}
+			catch (Exception)
+			{
+			}
+			finally
+			{
+				this.connectionReceived.Set();
+			}
 
-                    if (requestLine == null)
-                        return;
+			Action<HttpRequest, HttpResponse> processRequest = (Action<HttpRequest, HttpResponse>)asyncResult.AsyncState;
+						
+			if (client != null && client.Connected)
+			{
+				using (NetworkStream stream = client.GetStream())
+				{
+					StreamReader sr = new StreamReader(stream);
+					string requestLine = sr.ReadLine();
 
-                    HttpRequest request = new HttpRequest();
+					if (requestLine == null)
+						return;
 
-                    string[] requestLineParts = requestLine.Split(' ');
-                    request.Method = ParseHttpMethod(requestLineParts[0]);
-                    request.Url = requestLineParts[1];
-                    request.HttpVersion = requestLineParts[2].Substring(5); // Substring(5) is for HTTP/
+					HttpRequest request = new HttpRequest();
 
-                    this.ParseRequestHeaders(request, sr);
+					string[] requestLineParts = requestLine.Split(' ');
+					request.Method = ParseHttpMethod(requestLineParts[0]);
+					request.Url = requestLineParts[1];
+					request.HttpVersion = requestLineParts[2].Substring(5); // Substring(5) is for HTTP/
 
-                    if (stream.DataAvailable)
-                        this.ParseRequestBody(request, sr);
+					this.ParseRequestHeaders(request, sr);
 
-                    HttpResponse response = new HttpResponse();
+					if (stream.DataAvailable)
+						this.ParseRequestBody(request, sr);
 
-                    processRequest(request, response);
+					HttpResponse response = new HttpResponse();
 
-                    StreamWriter sw = new StreamWriter(stream);
-                    sw.WriteLine("HTTP/{0} {1}", request.HttpVersion, FormatStatusCode(response.StatusCode));
+					processRequest(request, response);
 
-                    foreach (var header in response.Headers)
-                        sw.WriteLine("{0}: {1}", header.Key, header.Value);
+					StreamWriter sw = new StreamWriter(stream);
+					sw.WriteLine("HTTP/{0} {1}", request.HttpVersion, FormatStatusCode(response.StatusCode));
 
-                    string body = response.GetBody();
+					foreach (var header in response.Headers)
+						sw.WriteLine("{0}: {1}", header.Key, header.Value);
 
-                    if (!response.Headers.ContainsKey("Content-Type"))
-                        sw.WriteLine("Content-Type: text/plain");
+					string body = response.GetBody();
 
-                    if (!response.Headers.ContainsKey("Content-Length"))
-                        sw.WriteLine("Content-Length: {0}", body.Length);
+					if (!response.Headers.ContainsKey("Content-Type"))
+						sw.WriteLine("Content-Type: text/plain");
 
-                    sw.WriteLine();
-                    sw.Write(body);
-                    sw.WriteLine();
-                    sw.Flush();
-                }
-            }, client);
+					if (!response.Headers.ContainsKey("Content-Length"))
+						sw.WriteLine("Content-Length: {0}", body.Length);
+
+					sw.WriteLine();
+					sw.Write(body);
+					sw.WriteLine();
+					sw.Flush();
+				}
+			}
         }
 
         private static HttpMethod ParseHttpMethod(string method)

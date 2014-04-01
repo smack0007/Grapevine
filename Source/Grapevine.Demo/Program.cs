@@ -24,6 +24,14 @@ namespace Grapevine.Demo
                     response.StatusCode = HttpStatusCode.NotFound;
                 }
             });
+
+			Console.WriteLine("Press enter to stop HTTP server.");
+			Console.ReadLine();
+
+			http.Stop();
+
+			Console.WriteLine("Press any key to exit...");
+			Console.ReadKey();
         }
     }
 }
