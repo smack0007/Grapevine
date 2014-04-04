@@ -1,8 +1,4 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 
 namespace Grapevine.Demo
 {
@@ -11,20 +7,23 @@ namespace Grapevine.Demo
         static void Main(string[] args)
         {
             HttpServer http = new HttpServer();
-            http.Start((request, response) =>
-            {
-                Console.WriteLine(request.Url);
 
-                if (request.Url != "/foo")
-                {
-                    response.WriteLine("Hello from {0}.", request.Url);
-                }
-                else
-                {
-                    response.StatusCode = HttpStatusCode.NotFound;
-                }
-            });
+			http.ProcessRequest = (request, response) =>
+			{
+				Console.WriteLine(request.Url);
 
+				if (request.Url != "/foo")
+				{
+					response.WriteLine("Hello from {0}.", request.Url);
+				}
+				else
+				{
+					response.StatusCode = HttpStatusCode.NotFound;
+				}
+			};
+			
+			http.Start();
+									
 			Console.WriteLine("Press enter to stop HTTP server.");
 			Console.ReadLine();
 

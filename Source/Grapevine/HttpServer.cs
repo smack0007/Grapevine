@@ -17,6 +17,7 @@ namespace Grapevine
 
 		IPAddress address;
 		int port;
+		Action<HttpRequest, HttpResponse> processRequest;
 
 		public bool IsRunning
 		{
@@ -49,7 +50,20 @@ namespace Grapevine
 				this.port = value;
 			}
 		}
-				
+
+		public Action<HttpRequest, HttpResponse> ProcessRequest
+		{
+			get { return this.processRequest; }
+			
+			set
+			{
+				if (this.IsRunning)
+					ThrowPropertyCannotBeChangedWhenRunningException("ProcessRequest");
+
+				this.processRequest = value;
+			}
+		}
+
         public HttpServer()
         {
 			this.address = IPAddress.Any;
@@ -61,10 +75,10 @@ namespace Grapevine
 			throw new GrapevineException(string.Format("{0} property may not be changed once the server is running.", property));
 		}
 
-        public void Start(Action<HttpRequest, HttpResponse> processRequest)
+        public void Start()
         {
-            if (processRequest == null)
-                throw new ArgumentNullException("processRequest");
+			if (this.processRequest == null)
+				throw new GrapevineException("ProcessRequest must be set before starting the server.");
 
             this.tcpListener = new TcpListener(this.address, this.port);
             this.tcpListener.Start();
@@ -78,7 +92,7 @@ namespace Grapevine
 									
 					this.tcpListener.BeginAcceptTcpClient(
 						this.Connect,
-						processRequest);
+						null);
 
 					this.connectionReceived.WaitOne();
 				}
@@ -109,8 +123,6 @@ namespace Grapevine
 			{
 				this.connectionReceived.Set();
 			}
-
-			Action<HttpRequest, HttpResponse> processRequest = (Action<HttpRequest, HttpResponse>)asyncResult.AsyncState;
 						
 			if (client != null && client.Connected)
 			{
@@ -136,7 +148,7 @@ namespace Grapevine
 
 					HttpResponse response = new HttpResponse();
 
-					processRequest(request, response);
+					this.processRequest(request, response);
 
 					StreamWriter sw = new StreamWriter(stream);
 					sw.WriteLine("HTTP/{0} {1}", request.HttpVersion, FormatStatusCode(response.StatusCode));
